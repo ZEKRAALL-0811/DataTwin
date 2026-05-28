@@ -16,3 +16,9 @@ dist/
 Thumbs.db
 .vscode/
 .idea/
+
+# Internal tooling
+.gemini/
+.agent/
+.gsd/
+graphify-out/

@@ -40,7 +40,7 @@ def load_file(uploaded_file) -> pd.DataFrame:
     try:
         if extension == ".csv":
             delimiter = _detect_csv_delimiter(file_bytes)
-            df = pd.read_csv(io.BytesIO(file_bytes), sep=delimiter, engine="python")
+            df = _read_csv_with_encoding_fallback(file_bytes, delimiter)
         else:
             df = pd.read_excel(io.BytesIO(file_bytes))
     except Exception as exc:
@@ -166,6 +166,24 @@ def _detect_csv_delimiter(file_bytes: bytes) -> str:
         return dialect.delimiter
     except csv.Error:
         return ","
+
+
+def _read_csv_with_encoding_fallback(file_bytes: bytes, delimiter: str) -> pd.DataFrame:
+    """Try reading CSV bytes with multiple encodings, returning the first that succeeds."""
+    encodings = ("utf-8", "utf-8-sig", "latin-1", "cp1252")
+    last_exc = None
+    for encoding in encodings:
+        try:
+            return pd.read_csv(
+                io.BytesIO(file_bytes),
+                sep=delimiter,
+                engine="python",
+                encoding=encoding,
+            )
+        except (UnicodeDecodeError, Exception) as exc:
+            last_exc = exc
+            continue
+    raise ValueError("Could not decode CSV with any supported encoding.") from last_exc
 
 
 def _decode_bytes(file_bytes: bytes) -> str:

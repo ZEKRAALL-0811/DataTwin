@@ -134,16 +134,18 @@ with st.sidebar:
         )
 
         pages = ["Upload", "Insights", "Chat", "Forecast"]
+
+        # Sync the radio index from current_page (allows buttons on other pages to navigate)
+        current_idx = pages.index(st.session_state["current_page"]) if st.session_state["current_page"] in pages else 0
+
         selected_page = st.radio(
             "Navigation Menu",
             options=pages,
-            index=pages.index(st.session_state["current_page"]),
+            index=current_idx,
             key="navigation_sidebar_menu",
-            label_visibility="collapsed"
+            label_visibility="collapsed",
+            on_change=lambda: st.session_state.update({"current_page": st.session_state["navigation_sidebar_menu"]}),
         )
-        if selected_page != st.session_state["current_page"]:
-            st.session_state["current_page"] = selected_page
-            st.rerun()
 
         st.markdown("---")
         

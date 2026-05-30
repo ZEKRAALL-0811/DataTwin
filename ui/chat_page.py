@@ -29,6 +29,20 @@ def format_plotly_figure(fig):
         # Apply clean dark gray lines for grid axes
         fig.update_xaxes(gridcolor="#2c2c2c", zerolinecolor="#3a3a3a")
         fig.update_yaxes(gridcolor="#2c2c2c", zerolinecolor="#3a3a3a")
+        
+        # Scrub pd.Interval objects from traces to prevent JSON serialization errors
+        for trace in fig.data:
+            for attr in ['x', 'y', 'z', 'customdata', 'text', 'hovertext']:
+                val = getattr(trace, attr, None)
+                if val is not None:
+                    if isinstance(val, (pd.Series, pd.Index)):
+                        if "interval" in str(val.dtype).lower() or isinstance(getattr(val, "dtype", None), pd.CategoricalDtype):
+                            setattr(trace, attr, val.astype(str))
+                    elif isinstance(val, list) and len(val) > 0 and type(val[0]).__name__ == 'Interval':
+                        setattr(trace, attr, [str(v) if type(v).__name__ == 'Interval' else v for v in val])
+                    elif str(type(val).__name__) == 'ndarray' and len(val) > 0 and type(val[0]).__name__ == 'Interval':
+                        import numpy as np
+                        setattr(trace, attr, np.array([str(v) if type(v).__name__ == 'Interval' else v for v in val]))
     return fig
 
 
@@ -145,7 +159,7 @@ def render_chat_page():
                     st.rerun()
 
     # Display chat logs
-    for msg in st.session_state["chat_history"]:
+    for msg_idx, msg in enumerate(st.session_state["chat_history"]):
         role = msg["role"]
         avatar = "🧬" if role == "ai" else None
         
@@ -183,6 +197,17 @@ def render_chat_page():
                     with st.expander("💻 View Generated Code"):
                         st.code(code_snippet, language="python")
 
+                # Show suggested follow-ups
+                followups = msg.get("suggested_followups", [])
+                if followups:
+                    st.markdown("<span style='color: #00f5d4; font-size: 0.85rem; font-weight: 600; display:block; margin-top:12px; margin-bottom:8px;'>🔍 Explore Further:</span>", unsafe_allow_html=True)
+                    f_cols = st.columns(len(followups))
+                    for idx, q in enumerate(followups):
+                        with f_cols[idx]:
+                            if st.button(q, key=f"followup_{msg_idx}_{idx}", width='stretch'):
+                                st.session_state["chat_history"].append({"role": "user", "content": q})
+                                st.rerun()
+
     # Handle query input
     user_query = st.chat_input("Ask anything about your dataset...")
     if user_query:
@@ -197,7 +222,18 @@ def render_chat_page():
             try:
                 # Step 1: Generate code
                 st.write("📝 Writing analysis code...")
-                code = generate_code(last_query, df_meta)
+                
+                # Build conversation context from the last 3 ai messages
+                history_list = [m for m in st.session_state["chat_history"] if m.get("role") == "ai" and "question" in m and "result_summary" in m]
+                last_3 = history_list[-3:]
+                context_str = ""
+                if last_3:
+                    context_str = "Previous questions and results:\n"
+                    for i, m in enumerate(last_3, 1):
+                        context_str += f"Q{i}: {m['question']} -> Result: {m['result_summary']}\n"
+                    context_str += "\nNow answer the new question in that context."
+                
+                code = generate_code(last_query, df_meta, context_str)
                 
                 # Step 2: Execute code
                 st.write("⚡ Running analysis on your dataset...")
@@ -205,10 +241,15 @@ def render_chat_page():
                 
                 # Step 3: Generate plain-English explanation
                 explanation = ""
+                followups = []
                 if execution_result["type"] != "error":
                     st.write("💡 Preparing easy-to-understand summary...")
                     result_summary = _summarize_result(execution_result)
                     explanation = generate_chat_explanation(last_query, result_summary, df_meta)
+                    
+                    st.write("🔍 Generating follow-up questions...")
+                    from core.codex_engine import generate_followup_questions
+                    followups = generate_followup_questions(last_query, result_summary)
                 
                 # Build the response
                 if execution_result["type"] == "error":
@@ -224,6 +265,9 @@ def render_chat_page():
                     "code": code,
                     "result": execution_result,
                     "explanation": explanation,
+                    "question": last_query,
+                    "result_summary": result_summary if execution_result["type"] != "error" else execution_result["data"],
+                    "suggested_followups": followups
                 }
             except Exception as exc:
                 logger.exception("AI query pipeline execution failed.")

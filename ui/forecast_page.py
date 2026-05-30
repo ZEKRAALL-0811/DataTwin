@@ -92,14 +92,48 @@ def _prepare_prophet_df(df: pd.DataFrame, date_col: str, target_col: str) -> pd.
 
 
 def _run_prophet_forecast(prophet_df: pd.DataFrame, periods: int, freq: str):
-    """Run Prophet and return (model, forecast DataFrame)."""
+    """Run Prophet and return (model, forecast DataFrame, accuracy_score, test_len)."""
     from prophet import Prophet
+    import numpy as np
+    import logging as _logging
 
     # Suppress Prophet's verbose logging
-    import logging as _logging
     _logging.getLogger("prophet").setLevel(_logging.WARNING)
     _logging.getLogger("cmdstanpy").setLevel(_logging.WARNING)
 
+    # 1. Backtesting for accuracy
+    accuracy_score = None
+    test_len = 0
+    n = len(prophet_df)
+    if n >= 10:
+        split_idx = int(n * 0.8)
+        train_df = prophet_df.iloc[:split_idx]
+        test_df = prophet_df.iloc[split_idx:]
+        test_len = len(test_df)
+        
+        if test_len > 0 and len(train_df) >= 5:
+            try:
+                bt_model = Prophet(
+                    daily_seasonality=False,
+                    weekly_seasonality=True,
+                    yearly_seasonality=True,
+                    changepoint_prior_scale=0.05,
+                )
+                bt_model.fit(train_df)
+                
+                # Predict only the dates in the test set
+                future_bt = pd.DataFrame({"ds": test_df["ds"]})
+                forecast_bt = bt_model.predict(future_bt)
+                
+                # Calculate MAPE
+                merged = pd.merge(test_df, forecast_bt[["ds", "yhat"]], on="ds")
+                y_true = merged["y"].replace(0, 1e-5)
+                mape = np.mean(np.abs((y_true - merged["yhat"]) / y_true)) * 100
+                accuracy_score = max(0, 100 - mape)
+            except Exception as exc:
+                logger.warning(f"Backtesting failed: {exc}")
+
+    # 2. Main Forecast
     model = Prophet(
         daily_seasonality=False,
         weekly_seasonality=True,
@@ -111,7 +145,7 @@ def _run_prophet_forecast(prophet_df: pd.DataFrame, periods: int, freq: str):
     future = model.make_future_dataframe(periods=periods, freq=freq)
     forecast = model.predict(future)
 
-    return model, forecast
+    return model, forecast, accuracy_score, test_len
 
 
 def _detect_frequency(prophet_df: pd.DataFrame) -> str:
@@ -243,10 +277,12 @@ def render_forecast_page():
         if run_btn:
             with st.spinner("🔮 Prophet is analyzing patterns and generating forecast..."):
                 try:
-                    model, forecast = _run_prophet_forecast(prophet_df, periods, detected_freq)
+                    model, forecast, accuracy_score, test_len = _run_prophet_forecast(prophet_df, periods, detected_freq)
                     st.session_state["_forecast_result"] = {
                         "model": model,
                         "forecast": forecast,
+                        "accuracy": accuracy_score,
+                        "test_len": test_len,
                         "prophet_df": prophet_df,
                         "target_col": target_col,
                         "date_col": date_col,
@@ -259,9 +295,39 @@ def render_forecast_page():
                     return
 
         result = st.session_state["_forecast_result"]
-        forecast = result["forecast"]
+        forecast = result["forecast"].copy()
         prophet_df = result["prophet_df"]
         target_col_name = result["target_col"]
+
+        # ── What-If Scenario Simulation ───────────────────────────────────
+        if "forecast_scenario" not in st.session_state:
+            st.session_state["forecast_scenario"] = "Realistic 📊"
+            
+        st.markdown("<p style='color: #a0a0a0; font-size: 0.95rem; font-weight: 600; margin-top: 10px; margin-bottom: 8px;'>What-If Scenario Simulation:</p>", unsafe_allow_html=True)
+        sc1, sc2, sc3 = st.columns(3)
+        with sc1:
+            if st.button("Optimistic 📈 (+20%)", width='stretch', type="primary" if st.session_state["forecast_scenario"] == "Optimistic 📈" else "secondary"):
+                st.session_state["forecast_scenario"] = "Optimistic 📈"
+                st.rerun()
+        with sc2:
+            if st.button("Realistic 📊 (Base)", width='stretch', type="primary" if st.session_state["forecast_scenario"] == "Realistic 📊" else "secondary"):
+                st.session_state["forecast_scenario"] = "Realistic 📊"
+                st.rerun()
+        with sc3:
+            if st.button("Pessimistic 📉 (-20%)", width='stretch', type="primary" if st.session_state["forecast_scenario"] == "Pessimistic 📉" else "secondary"):
+                st.session_state["forecast_scenario"] = "Pessimistic 📉"
+                st.rerun()
+
+        multiplier = 1.0
+        if st.session_state["forecast_scenario"] == "Optimistic 📈":
+            multiplier = 1.2
+        elif st.session_state["forecast_scenario"] == "Pessimistic 📉":
+            multiplier = 0.8
+            
+        future_mask = forecast["ds"] > prophet_df["ds"].max()
+        forecast.loc[future_mask, "yhat"] *= multiplier
+        forecast.loc[future_mask, "yhat_lower"] *= multiplier
+        forecast.loc[future_mask, "yhat_upper"] *= multiplier
 
         # ── Forecast Metrics Cards ────────────────────────────────────────
         _section_header("📊 Forecast Summary")
@@ -286,9 +352,23 @@ def render_forecast_page():
                 st.markdown(_metric_card(label, value, color), unsafe_allow_html=True)
 
         st.markdown("<br/>", unsafe_allow_html=True)
+        
+        acc_score = result.get("accuracy")
+        test_len = result.get("test_len")
+        if acc_score is not None:
+            acc_color = "#6bcb77" if acc_score >= 80 else ("#ffd93d" if acc_score >= 60 else "#ff6b6b")
+            st.markdown(
+                f"""
+                <div style="background: rgba(0, 0, 0, 0.2); border: 1px solid #2a3a4a; border-left: 5px solid {acc_color}; padding: 12px 18px; border-radius: 8px; margin-bottom: 20px;">
+                    <div style="color: {acc_color}; font-weight: 700; font-size: 1rem;">🎯 Model Accuracy: {acc_score:.1f}%</div>
+                    <div style="color: #a0a0a0; font-size: 0.85rem; margin-top: 4px;">Validated on your last {test_len} data points</div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
 
         # ── 1. Main Forecast Chart ────────────────────────────────────────
-        _section_header("🔮 Forecast vs Actual", f"Predicted {target_col_name} with 95% confidence interval")
+        _section_header("🔮 Forecast vs Actual", f"Predicted {target_col_name} with 95% confidence interval — <b>Scenario: {st.session_state['forecast_scenario']}</b>")
 
         fig = go.Figure()
 

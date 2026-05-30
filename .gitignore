@@ -22,3 +22,10 @@ Thumbs.db
 .agent/
 .gsd/
 graphify-out/
+
+testsprite_tests/
+*.csv
+!sales_data_sample.csv
+*.pdf
+
+testsprite_tests\tmp\config.json

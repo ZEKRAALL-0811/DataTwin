@@ -4,8 +4,8 @@ import re
 from pathlib import Path
 
 
-DEFAULT_MODEL = "gemini-2.5-flash"
-PLACEHOLDER_API_KEY = "your_gemini_api_key_here"
+DEFAULT_MODEL = "llama-3.3-70b-versatile"
+PLACEHOLDER_API_KEY = "your_groq_api_key_here"
 logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -49,10 +49,12 @@ Rules:
 - If there are not enough numeric columns for regression, store a clear string in `result` explaining why."""
 
 
-def generate_code(question: str, df_meta: dict) -> str:
+def generate_code(question: str, df_meta: dict, context_str: str = "") -> str:
     """Generate Python code that answers a natural-language question about the dataset."""
     system_prompt = build_system_prompt(df_meta)
-    return call_gemini(system_prompt, question)
+    if context_str:
+        system_prompt += "\n\n" + context_str
+    return call_llm(system_prompt, question)
 
 
 def generate_explanation(context: str, df_meta: dict) -> str:
@@ -85,7 +87,7 @@ Rules:
 6. Return ONLY the bullet points as markdown. No headers, no intro text, no code."""
 
     try:
-        return call_gemini(system_prompt, f"Explain this to a non-technical person:\n\n{context}")
+        return call_llm(system_prompt, f"Explain this to a non-technical person:\n\n{context}")
     except Exception as exc:
         logger.warning("Explanation generation failed: %s", exc)
         return ""
@@ -123,55 +125,173 @@ Rules:
 6. Return ONLY the bullet points as markdown text. No headers, no intro, no code."""
 
     try:
-        return call_gemini(system_prompt, "Generate the plain-English summary.")
+        return call_llm(system_prompt, "Generate the plain-English summary.")
     except Exception as exc:
         logger.warning("Chat explanation generation failed: %s", exc)
         return ""
 
 
-def call_gemini(system_prompt: str, user_question: str) -> str:
-    """Call Gemini with the DataTwin prompt and return raw executable Python code."""
+def generate_data_story(insights_text: str, df_meta: dict) -> str:
+    """Generate a ~200-word executive summary narrative from collected insights.
+
+    Args:
+        insights_text: All auto-generated insight bullets concatenated as text.
+        df_meta: The dataset metadata dict.
+
+    Returns:
+        A plain-English narrative paragraph suitable for an executive audience.
+    """
+    rows = df_meta.get("rows", 0)
+    cols = df_meta.get("columns", 0)
+    column_list = df_meta.get("column_names", [])
+    filename = df_meta.get("filename", "your dataset")
+
+    system_prompt = f"""You are DataTwin's storytelling engine. Your audience is a busy, 
+non-technical executive who has 60 seconds to understand this dataset.
+
+Dataset info:
+- Name: {filename}
+- Size: {rows:,} rows × {cols} columns
+- Columns: {column_list}
+
+Here are the key insights already discovered:
+{insights_text}
+
+Your task:
+1. Write a single, flowing executive summary of approximately 200 words.
+2. Structure it as 2-3 short paragraphs — NOT bullet points.
+3. Start with a one-sentence overview of what this data is about.
+4. Highlight the 3-4 most important findings from the insights.
+5. End with a one-sentence recommendation or takeaway.
+6. Use ZERO technical jargon — no "correlation", "standard deviation", "skew", "regression".
+7. Write in a warm, confident, professional tone — like a trusted analyst briefing a CEO.
+8. Return ONLY the narrative text. No headers, no markdown formatting, no code."""
+
+    try:
+        return call_llm(system_prompt, "Write the executive data story now.")
+    except Exception as exc:
+        logger.warning("Data story generation failed: %s", exc)
+        return "Unable to generate the data story at this time. Please try again."
+
+
+def generate_actionable_recommendation(insight_text: str) -> str:
+    """Generate an actionable recommendation based on an insight."""
+    system_prompt = "You are DataTwin's business strategist."
+    user_prompt = f"Based on this data insight: {insight_text}\n\nGive ONE specific actionable recommendation in 1-2 sentences for a non-technical business owner. Be direct and practical. Start with '✅ Action: '"
+    try:
+        return call_llm(system_prompt, user_prompt)
+    except Exception as exc:
+        logger.warning("Actionable recommendation generation failed: %s", exc)
+        return ""
+
+
+def generate_followup_questions(question: str, result_summary: str) -> list:
+    """Generate exactly 3 specific follow-up questions based on the previous answer."""
+    system_prompt = "You are an intelligent data analyst. Return exactly 3 specific follow-up questions as a JSON array of strings. Do not include any other text or markdown formatting."
+    user_prompt = f"The user just asked: {question}\nThe answer was: {result_summary}\nSuggest exactly 3 specific follow-up questions they should ask next to go deeper into this analysis. Return only the 3 questions as a JSON array, nothing else."
+    try:
+        response = call_llm(system_prompt, user_prompt)
+        import json
+        import re
+        match = re.search(r'\[.*\]', response, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+        else:
+            return json.loads(response)
+    except Exception as exc:
+        logger.warning("Failed to generate follow-up questions: %s", exc)
+        return []
+
+def standardize_categories(column_name: str, unique_values: list) -> dict:
+    """Use the LLM to find and standardize inconsistent categorical values.
+    
+    Args:
+        column_name: The name of the column being analyzed.
+        unique_values: A list of unique string values from the column.
+        
+    Returns:
+        A dictionary mapping original messy values to standardized clean values.
+    """
+    import json
+    
+    system_prompt = f"""You are an expert data cleaner.
+Your job is to fix inconsistent spelling, casing, or punctuation in a categorical column.
+
+Column Name: '{column_name}'
+Unique Values: {unique_values}
+
+Rules:
+1. Identify values that clearly mean the same thing but are spelled/formatted differently.
+   (e.g., "USA", "U.S.A.", "United States" -> map all to "United States")
+   (e.g., "apple", "Apple ", "APPLE" -> map all to "Apple")
+2. Choose the most common, longest, or most formal-looking version as the standard.
+3. Return ONLY a valid JSON dictionary where:
+   - The key is the original messy value
+   - The value is the standardized clean value
+4. Only include values in the JSON that actually need changing. If a value is fine, you can omit it.
+5. Do NOT include markdown code blocks (```json) in your response, just the raw JSON text.
+6. If no standardizations are needed, return an empty dictionary: {{}}"""
+
+    try:
+        response_text = call_llm(system_prompt, "Return the JSON mapping.")
+        # Strip potential markdown fences just in case
+        response_text = response_text.replace("```json", "").replace("```", "").strip()
+        mapping = json.loads(response_text)
+        if isinstance(mapping, dict):
+            return mapping
+    except Exception as exc:
+        logger.warning("Failed to standardize categories for %s: %s", column_name, exc)
+    
+    return {}
+
+
+def call_llm(system_prompt: str, user_question: str) -> str:
+    """Call the LLM with the DataTwin prompt and return raw executable Python code."""
     try:
         from dotenv import load_dotenv
-        from google import genai
-        from google.genai import types
+        from groq import Groq
 
         load_dotenv(PROJECT_ROOT / ".env", override=True)
         api_key = _get_api_key()
 
-        client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(
+        client = Groq(api_key=api_key)
+        response = client.chat.completions.create(
             model=DEFAULT_MODEL,
-            contents=user_question,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=0,
-            ),
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_question},
+            ],
+            temperature=0,
         )
 
-        content = getattr(response, "text", None)
+        content = response.choices[0].message.content
         if not content:
-            raise ValueError("Gemini returned an empty response.")
+            raise ValueError("LLM returned an empty response.")
 
         code = _strip_markdown_code_fence(content)
         if not code:
-            raise ValueError("Gemini returned an empty code response.")
+            raise ValueError("LLM returned an empty code response.")
 
         return code
     except Exception as exc:
-        logger.exception("Gemini code generation failed.")
+        logger.exception("LLM code generation failed.")
         raise RuntimeError("AI is temporarily unavailable. Please try again.") from exc
 
 
 def call_openai(system_prompt: str, user_question: str) -> str:
-    """Backward-compatible alias for older imports; calls Gemini."""
-    return call_gemini(system_prompt, user_question)
+    """Backward-compatible alias for older imports; calls LLM."""
+    return call_llm(system_prompt, user_question)
+
+
+def call_gemini(system_prompt: str, user_question: str) -> str:
+    """Backward-compatible alias for older imports; calls LLM."""
+    return call_llm(system_prompt, user_question)
 
 
 def _get_api_key() -> str:
-    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    api_key = os.getenv("GROQ_API_KEY", "").strip()
     if not api_key or api_key == PLACEHOLDER_API_KEY:
-        raise ValueError("GEMINI_API_KEY is not configured.")
+        raise ValueError("GROQ_API_KEY is not configured.")
     return api_key
 
 

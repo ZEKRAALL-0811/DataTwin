@@ -5,6 +5,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import logging
+import re as _re
 
 logger = logging.getLogger(__name__)
 
@@ -58,10 +59,43 @@ def _stat_card(label: str, value: str, icon: str = ""):
     """
 
 
+@st.cache_data(show_spinner=False)
+def _get_recommendation(insight_text: str) -> str:
+    try:
+        from core.codex_engine import generate_actionable_recommendation
+        return generate_actionable_recommendation(insight_text)
+    except Exception as e:
+        logger.error(f"Error getting recommendation: {e}")
+        return ""
+
 def _explanation_box(explanation: str):
-    """Render a styled explanation box below a chart."""
+    """Render a styled explanation box below a chart, with an actionable recommendation."""
     if not explanation or not explanation.strip():
         return
+        
+    action_html = ""
+    rec = _get_recommendation(explanation)
+    if rec:
+        # Strip the prefix if the LLM included it so we don't double up
+        rec = rec.replace("✅ Action:", "").strip()
+        action_html = f"""
+        <div style="
+            background: linear-gradient(135deg, rgba(74, 222, 128, 0.08) 0%, rgba(74, 222, 128, 0.02) 100%);
+            border: 1px solid rgba(74, 222, 128, 0.2);
+            border-left: 4px solid #4ade80;
+            border-radius: 8px;
+            padding: 14px 16px;
+            margin-top: 16px;
+        ">
+            <div style="color: #4ade80; font-weight: 700; font-size: 0.88rem; margin-bottom: 6px;">
+                💡 Recommended Action
+            </div>
+            <div style="color: #d0d0d0; font-size: 0.85rem; line-height: 1.6;">
+                {rec}
+            </div>
+        </div>
+        """
+
     st.markdown(
         f"""
         <div style="
@@ -78,6 +112,7 @@ def _explanation_box(explanation: str):
             <div style="color: #d0d0d0; font-size: 0.85rem; line-height: 1.7;">
                 {explanation}
             </div>
+            {action_html}
         </div>
         """,
         unsafe_allow_html=True,
@@ -88,7 +123,6 @@ def _build_stats_explanation(desc: pd.DataFrame, num_cols: list) -> str:
     """Build a plain-English explanation of summary statistics."""
     bullets = []
     if len(num_cols) > 0:
-        # Find the column with the biggest range
         ranges = {}
         for col in desc.index:
             try:
@@ -102,7 +136,6 @@ def _build_stats_explanation(desc: pd.DataFrame, num_cols: list) -> str:
             widest = max(ranges, key=ranges.get)
             bullets.append(f"📊 <b>{widest}</b> has the widest range of values — it varies the most across your data.")
 
-        # Find column with highest average
         means = {}
         for col in desc.index:
             try:
@@ -114,7 +147,6 @@ def _build_stats_explanation(desc: pd.DataFrame, num_cols: list) -> str:
             highest_avg = max(means, key=means.get)
             bullets.append(f"📌 <b>{highest_avg}</b> has the highest average value ({means[highest_avg]:,.1f}).")
 
-        # Check for skewed columns
         for col in desc.index:
             try:
                 skew_val = float(desc.loc[col, "Skew"])
@@ -147,7 +179,7 @@ def _build_distribution_explanation(df: pd.DataFrame, display_cols: list) -> str
             break
 
     if len(bullets) == 1:
-        bullets.append(f"✅ Your numeric columns are fairly evenly spread, with no major surprises in how the values are distributed.")
+        bullets.append("✅ Your numeric columns are fairly evenly spread, with no major surprises in how the values are distributed.")
 
     return "<br>".join(bullets)
 
@@ -157,7 +189,6 @@ def _build_correlation_explanation(corr: pd.DataFrame) -> str:
     bullets = []
     bullets.append("📊 This color grid shows which columns move together. Bright teal = they rise and fall together. Purple = when one goes up, the other goes down.")
 
-    # Find strongest positive correlation
     strong_pos = []
     strong_neg = []
     weak = []
@@ -221,7 +252,7 @@ def _build_categorical_explanation(df: pd.DataFrame, cat_cols: list) -> str:
         if len(vc) > 0:
             top_val = vc.index[0]
             top_pct = (vc.iloc[0] / len(df) * 100)
-            bullets.append(f"📌 In <b>{col_name}</b>, the most common value is \"<b>{top_val}</b>\" — it appears in {top_pct:.0f}% of your data.")
+            bullets.append(f'📌 In <b>{col_name}</b>, the most common value is "<b>{top_val}</b>" — it appears in {top_pct:.0f}% of your data.')
 
     return "<br>".join(bullets)
 
@@ -249,6 +280,31 @@ def _build_outlier_explanation(df: pd.DataFrame, box_cols: list) -> str:
     return "<br>".join(bullets)
 
 
+def _render_data_story_card(story: str):
+    """Render the data story as a premium styled card."""
+    st.markdown(
+        f"""
+        <div style="
+            background: linear-gradient(135deg, #0d1b2a 0%, #1b2838 50%, #162030 100%);
+            border: 1px solid #2a3a4a;
+            border-left: 5px solid {ACCENT};
+            border-radius: 14px;
+            padding: 24px 28px;
+            margin: 12px 0 24px 0;
+            box-shadow: 0 8px 32px rgba(0, 245, 212, 0.08);
+        ">
+            <div style="color: {ACCENT}; font-weight: 800; font-size: 1.1rem; margin-bottom: 14px; letter-spacing: 0.02em;">
+                📖 Your Data Story
+            </div>
+            <div style="color: #e0e0e0; font-size: 0.95rem; line-height: 1.85; font-family: 'Georgia', 'Times New Roman', serif;">
+                {story}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # MAIN RENDER
 # ═════════════════════════════════════════════════════════════════════════════
@@ -261,6 +317,24 @@ def render_insights_page():
 
     df: pd.DataFrame = st.session_state["df"]
     meta: dict = st.session_state["df_meta"]
+
+    # Collector for all insight explanations (used by Generate Data Story)
+    insight_bullets = []
+    
+    # Force scroll to top of page on load
+    import streamlit.components.v1 as components
+    components.html(
+        """
+        <script>
+            var body = window.parent.document.querySelector('.main');
+            if (body) {
+                body.scrollTo(0, 0);
+            }
+            window.parent.scrollTo(0, 0);
+        </script>
+        """,
+        height=0
+    )
 
     st.markdown(
         f"""
@@ -297,6 +371,45 @@ def render_insights_page():
 
     st.markdown("<br/>", unsafe_allow_html=True)
 
+    # ── Data Story: Show if already generated ────────────────────────────────
+    if st.session_state.get("data_story"):
+        _render_data_story_card(st.session_state["data_story"])
+        
+        from core.pdf_generator import generate_pdf_report
+        
+        forecast_summary = None
+        if "_forecast_result" in st.session_state:
+            res = st.session_state["_forecast_result"]
+            f_df = res["forecast"]
+            p_df = res["prophet_df"]
+            h_mean = p_df["y"].mean()
+            f_future = f_df[f_df["ds"] > p_df["ds"].max()]
+            f_mean = f_future["yhat"].mean() if len(f_future) > 0 else 0
+            change = ((f_mean - h_mean) / h_mean * 100) if h_mean != 0 else 0
+            direction = "increase" if change > 1 else ("decrease" if change < -1 else "remain stable")
+            forecast_summary = f"Based on historical data, {res['target_col']} is expected to {direction} with an estimated change of {abs(change):.1f}%."
+
+        health_score = st.session_state.get("health_score", {}).get("overall", 0)
+        saved_insights = st.session_state.get("insight_bullets", [])
+        
+        pdf_bytes = generate_pdf_report(
+            dataset_name=meta.get("file_name", "dataset.csv"),
+            health_score=health_score,
+            insights=saved_insights,
+            data_story=st.session_state["data_story"],
+            forecast_summary=forecast_summary
+        )
+        
+        st.download_button(
+            label="Download Full Report 📄",
+            data=pdf_bytes,
+            file_name=f"DataTwin_Report_{meta.get('file_name', 'dataset').split('.')[0]}.pdf",
+            mime="application/pdf",
+            type="primary",
+            use_container_width=True
+        )
+        st.markdown("<br/>", unsafe_allow_html=True)
+
     # ── 2. Summary Statistics Table ──────────────────────────────────────────
     if num_cols:
         _section_header("📐 Summary Statistics", "A quick snapshot of your number columns — averages, smallest/largest values, and more")
@@ -307,18 +420,18 @@ def render_insights_page():
         desc = desc[["count", "mean", "std", "min", "25%", "median", "75%", "max", "skew"]]
         desc.columns = ["Count", "Mean", "Std Dev", "Min", "25%", "Median", "75%", "Max", "Skew"]
 
-        # Round for display
         for c in desc.columns:
             desc[c] = desc[c].apply(lambda x: round(x, 2) if isinstance(x, float) else x)
 
         st.dataframe(desc, width='stretch')
-        _explanation_box(_build_stats_explanation(desc, num_cols))
+        stats_explanation = _build_stats_explanation(desc, num_cols)
+        _explanation_box(stats_explanation)
+        insight_bullets.append(stats_explanation)
 
     # ── 3. Distribution Histograms ───────────────────────────────────────────
     if num_cols:
         _section_header("📈 Value Spread", "How your numbers are distributed — where most values fall and where the extremes are")
 
-        # Show up to 6 columns at a time in a 2-column grid
         display_cols = num_cols[:8]
         n_charts = len(display_cols)
         n_rows_grid = (n_charts + 1) // 2
@@ -355,12 +468,13 @@ def render_insights_page():
         fig.update_xaxes(gridcolor=GRID_COLOR, zerolinecolor="#3a3a3a")
         fig.update_yaxes(gridcolor=GRID_COLOR, zerolinecolor="#3a3a3a")
 
-        # Style subplot titles
         for annotation in fig['layout']['annotations']:
             annotation['font'] = dict(size=13, color=TEXT_WHITE, family="Outfit, Inter, sans-serif")
 
         st.plotly_chart(fig, width='stretch')
-        _explanation_box(_build_distribution_explanation(df, display_cols))
+        dist_explanation = _build_distribution_explanation(df, display_cols)
+        _explanation_box(dist_explanation)
+        insight_bullets.append(dist_explanation)
 
     # ── 4. Correlation Heatmap ───────────────────────────────────────────────
     if len(num_cols) >= 2:
@@ -383,7 +497,9 @@ def render_insights_page():
             ),
         )
         st.plotly_chart(fig_corr, width='stretch')
-        _explanation_box(_build_correlation_explanation(corr))
+        corr_explanation = _build_correlation_explanation(corr)
+        _explanation_box(corr_explanation)
+        insight_bullets.append(corr_explanation)
 
     # ── 5. Missing Values ────────────────────────────────────────────────────
     if total_missing > 0:
@@ -422,16 +538,19 @@ def render_insights_page():
         fig_miss.update_yaxes(gridcolor=GRID_COLOR)
 
         st.plotly_chart(fig_miss, width='stretch')
-        _explanation_box(_build_missing_explanation(missing_df, total_missing, total_cells))
+        missing_explanation = _build_missing_explanation(missing_df, total_missing, total_cells)
+        _explanation_box(missing_explanation)
+        insight_bullets.append(missing_explanation)
     else:
         _section_header("✅ No Data Gaps", "Your dataset is 100% complete — every cell has a value!")
-        _explanation_box("✅ Great news! Your data has zero gaps. Every single cell is filled in, which means any analysis will be working with the full picture.")
+        no_gap_text = "✅ Great news! Your data has zero gaps. Every single cell is filled in, which means any analysis will be working with the full picture."
+        _explanation_box(no_gap_text)
+        insight_bullets.append(no_gap_text)
 
     # ── 6. Categorical Breakdowns ────────────────────────────────────────────
     if cat_cols:
         _section_header("🏷️ Most Common Categories", "How often each category appears in your text-based columns")
 
-        # Show up to 4 categorical columns, 2 per row
         display_cats = cat_cols[:4]
 
         for row_start in range(0, len(display_cats), 2):
@@ -468,7 +587,9 @@ def render_insights_page():
 
                     st.plotly_chart(fig_cat, width='stretch', key=f"cat_{col_name}")
 
-        _explanation_box(_build_categorical_explanation(df, display_cats))
+        cat_explanation = _build_categorical_explanation(df, display_cats)
+        _explanation_box(cat_explanation)
+        insight_bullets.append(cat_explanation)
 
     # ── 7. Outlier Detection (Bonus) ─────────────────────────────────────────
     if num_cols:
@@ -496,7 +617,27 @@ def render_insights_page():
         fig_box.update_yaxes(gridcolor=GRID_COLOR)
 
         st.plotly_chart(fig_box, width='stretch')
-        _explanation_box(_build_outlier_explanation(df, box_cols))
+        outlier_explanation = _build_outlier_explanation(df, box_cols)
+        _explanation_box(outlier_explanation)
+        insight_bullets.append(outlier_explanation)
+
+    st.session_state["insight_bullets"] = insight_bullets
+
+    # ── Generate Data Story Button ───────────────────────────────────────────
+    if not st.session_state.get("data_story"):
+        st.markdown("<br/>", unsafe_allow_html=True)
+        if st.button("📖 Generate Data Story", width='stretch', type='primary'):
+            with st.status("✍️ Writing your data story...", expanded=True) as status:
+                st.write("📝 Collecting all insights...")
+                # Strip HTML tags for clean text input to LLM
+                clean_insights = _re.sub(r"<[^>]+>", "", "\n".join(insight_bullets))
+
+                st.write("🤖 Asking AI to write your executive summary...")
+                from core.codex_engine import generate_data_story
+                story = generate_data_story(clean_insights, meta)
+                st.session_state["data_story"] = story
+                status.update(label="✅ Data story ready!", state="complete")
+            st.rerun()
 
     # ── Navigation ───────────────────────────────────────────────────────────
     st.markdown("<br/>", unsafe_allow_html=True)

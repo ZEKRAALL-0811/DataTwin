@@ -1,6 +1,8 @@
 import csv
 import io
 import logging
+import re
+import urllib.request
 import warnings
 from pathlib import Path
 
@@ -21,7 +23,16 @@ except ImportError:  # Allows this module to be tested before dependencies are i
 
 SUPPORTED_EXTENSIONS = {".csv", ".xlsx", ".xls"}
 DATETIME_PARSE_THRESHOLD = 0.8
+_SHEET_ID_PATTERN = re.compile(r"/spreadsheets/d/([a-zA-Z0-9-_]+)")
 logger = logging.getLogger(__name__)
+
+
+class InvalidSheetURL(ValueError):
+    """Raised when the provided URL is not a valid Google Sheets URL."""
+
+
+class SheetFetchError(RuntimeError):
+    """Raised when the Google Sheet cannot be fetched (private, network error, etc.)."""
 
 
 def load_file(uploaded_file) -> pd.DataFrame:
@@ -56,6 +67,56 @@ def load_file(uploaded_file) -> pd.DataFrame:
     return df
 
 
+def load_google_sheet(sheet_url: str) -> pd.DataFrame:
+    """Fetch a public Google Sheet as CSV and load it into session state.
+
+    Args:
+        sheet_url: A Google Sheets URL (e.g. https://docs.google.com/spreadsheets/d/SHEET_ID/edit).
+
+    Returns:
+        The cleaned DataFrame.
+
+    Raises:
+        InvalidSheetURL: If the URL doesn't match Google Sheets pattern.
+        SheetFetchError: If the sheet cannot be fetched.
+    """
+    if not sheet_url or not sheet_url.strip():
+        raise InvalidSheetURL("No URL provided.")
+
+    match = _SHEET_ID_PATTERN.search(sheet_url.strip())
+    if not match:
+        raise InvalidSheetURL("Not a valid Google Sheets URL.")
+
+    sheet_id = match.group(1)
+    export_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+
+    try:
+        req = urllib.request.Request(export_url, headers={"User-Agent": "DataTwin/1.0"})
+        response = urllib.request.urlopen(req, timeout=20)
+        csv_bytes = response.read()
+    except Exception as exc:
+        logger.exception("Failed to fetch Google Sheet: %s", sheet_id)
+        raise SheetFetchError("Could not fetch the Google Sheet.") from exc
+
+    if not csv_bytes or len(csv_bytes) < 10:
+        raise SheetFetchError("The Google Sheet appears to be empty.")
+
+    try:
+        delimiter = _detect_csv_delimiter(csv_bytes)
+        df = _read_csv_with_encoding_fallback(csv_bytes, delimiter)
+    except Exception as exc:
+        raise SheetFetchError("Could not parse the Google Sheet data.") from exc
+
+    df = clean_dataframe(df)
+    metadata = get_metadata(df)
+
+    if _is_streamlit_runtime():
+        st.session_state["df"] = df
+        st.session_state["df_meta"] = metadata
+
+    return df
+
+
 def get_metadata(df: pd.DataFrame) -> dict:
     """Return shape, column, type, missing-value, and sample metadata for a DataFrame."""
     datetime_columns = detect_datetime_columns(df)
@@ -73,6 +134,15 @@ def get_metadata(df: pd.DataFrame) -> dict:
     missing_counts = df.isna().sum()
     row_count = len(df)
 
+    sensitive_keywords = ['email', 'phone', 'password', 'ssn', 'id', 'address', 'dob']
+    sensitive_columns = [col for col in df.columns if any(kw in str(col).lower() for kw in sensitive_keywords)]
+    
+    sample_records = df.head(3).to_dict(orient="records")
+    for record in sample_records:
+        for col in sensitive_columns:
+            if pd.notna(record.get(col)):
+                record[col] = "••••••••"
+
     return {
         "rows": int(row_count),
         "columns": int(len(df.columns)),
@@ -88,7 +158,8 @@ def get_metadata(df: pd.DataFrame) -> dict:
         "numeric_columns": numeric_columns,
         "categorical_columns": categorical_columns,
         "datetime_columns": datetime_columns,
-        "sample": df.head(3).to_dict(orient="records"),
+        "sensitive_columns": sensitive_columns,
+        "sample": sample_records,
     }
 
 

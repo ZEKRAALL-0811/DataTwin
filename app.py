@@ -122,11 +122,12 @@ with st.sidebar:
 
     # If dataset has been uploaded, display short summary and provide navigation controls
     if st.session_state["df"] is not None:
+        _sidebar_display_name = "🔗 Live Google Sheet" if st.session_state.get("data_source") == "google_sheet" else st.session_state.get("filename", "Dataset")
         st.markdown(
             f"""
             <div style="background-color: #1a1a1a; padding: 12px; border-radius: 8px; border-left: 3px solid #00f5d4; margin-bottom: 20px;">
                 <span style="color: #888888; font-size: 0.75rem; text-transform: uppercase; font-weight: 600;">ACTIVE DATASET</span><br/>
-                <span style="font-weight: 700; font-size: 0.95rem; color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; margin-top: 3px;">{st.session_state['filename']}</span>
+                <span style="font-weight: 700; font-size: 0.95rem; color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; margin-top: 3px;">{_sidebar_display_name}</span>
                 <span style="color: #a0a0a0; font-size: 0.8rem; display: block; margin-top: 2px;">{st.session_state['df_meta']['rows']:,} rows &bull; {st.session_state['df_meta']['columns']:,} cols</span>
             </div>
             """,
@@ -134,6 +135,10 @@ with st.sidebar:
         )
 
         pages = ["Upload", "Insights", "Chat", "Forecast"]
+        
+        # Sync the widget key with current_page BEFORE creating the widget to avoid StreamlitAPIException
+        if "navigation_sidebar_menu" in st.session_state and st.session_state["navigation_sidebar_menu"] != st.session_state["current_page"]:
+            del st.session_state["navigation_sidebar_menu"]
 
         # Sync the radio index from current_page (allows buttons on other pages to navigate)
         current_idx = pages.index(st.session_state["current_page"]) if st.session_state["current_page"] in pages else 0
@@ -157,6 +162,13 @@ with st.sidebar:
             st.session_state["chat_history"] = []
             st.session_state["insights"] = None
             st.session_state["current_page"] = "Upload"
+            st.rerun()
+            
+        # Data Privacy: Clear all session state
+        st.markdown("<br/>", unsafe_allow_html=True)
+        if st.button("🗑️ Clear Session & Data", width='stretch', type='primary'):
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
             st.rerun()
     else:
         st.markdown(

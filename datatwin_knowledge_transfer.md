@@ -79,7 +79,7 @@ d:\Outskill(DataTwin)\
 ├── core/
 │   ├── __init__.py               # Empty init
 │   ├── auto_cleaner.py           # Data issue scanning, health score calculation, auto-cleaning logic
-│   ├── codex_engine.py           # LLM integration — code gen, explanations, data story, category standardization
+│   ├── ai_engine.py           # LLM integration — code gen, explanations, data story, category standardization
 │   ├── data_loader.py            # File loading, Google Sheets fetching, DataFrame cleaning, metadata extraction
 │   └── executor.py               # Sandboxed code execution with AST safety checks and timeout
 ├── ui/
@@ -117,7 +117,7 @@ st.session_state["filename"] ← e.g. "sales_data.csv"
 st.session_state["data_source"] ← "file" or "google_sheet"
 ```
 
-### 5.2 LLM Pipeline (core/codex_engine.py)
+### 5.2 LLM Pipeline (core/ai_engine.py)
 
 ```
 User question → build_system_prompt(df_meta) → call_llm(system, user)
@@ -132,7 +132,7 @@ User question → build_system_prompt(df_meta) → call_llm(system, user)
                                               Raw Python code string
 ```
 
-**Key functions in codex_engine.py:**
+**Key functions in ai_engine.py:**
 | Function | Purpose |
 |----------|---------|
 | `build_system_prompt(df_meta)` | Builds the system prompt with dataset schema for code generation |
@@ -375,7 +375,7 @@ The user was in the process of setting up TestSprite for automated webpage testi
 ## 17. Complete History of Changes (Since Last Git Commit)
 
 ### Change 1: Data Story Generator
-- Added `generate_data_story()` in `core/codex_engine.py`
+- Added `generate_data_story()` in `core/ai_engine.py`
 - Added "Generate Data Story" button + executive summary card + download button in `ui/insights_page.py`
 
 ### Change 2: Google Sheets Integration
@@ -385,7 +385,7 @@ The user was in the process of setting up TestSprite for automated webpage testi
 
 ### Change 3: Automated Data Cleaning Agent
 - Created `core/auto_cleaner.py` (NEW file) with `scan_data_issues()`, `clean_data()`
-- Added `standardize_categories()` in `core/codex_engine.py` for LLM-powered category mapping
+- Added `standardize_categories()` in `core/ai_engine.py` for LLM-powered category mapping
 - Updated `ui/upload_page.py` with "Data Issues Found" card, "✨ Auto-Clean My Data" button, Cleaning Report card, "📥 Download Cleaned Dataset" button
 
 ### Change 4: Data Health Score Widget
@@ -397,7 +397,7 @@ The user was in the process of setting up TestSprite for automated webpage testi
 - Replaced `google-genai` with `groq` in `requirements.txt`
 - Updated `.env` from `GEMINI_API_KEY` to `GROQ_API_KEY`
 - Created `.streamlit/secrets.toml` with Groq key
-- Completely rewrote `call_llm()` in `core/codex_engine.py` to use Groq Python client
+- Completely rewrote `call_llm()` in `core/ai_engine.py` to use Groq Python client
 - Changed `DEFAULT_MODEL` from `gemini-2.5-flash` to `llama-3.3-70b-versatile`
 - Added backward-compatible `call_gemini()` and `call_openai()` aliases
 

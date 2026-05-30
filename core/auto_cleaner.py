@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import logging
 from typing import Dict, Any, Tuple
-from core.codex_engine import standardize_categories
+from core.ai_engine import standardize_categories
 
 logger = logging.getLogger(__name__)
 

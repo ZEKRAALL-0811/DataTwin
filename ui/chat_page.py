@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import logging
 import plotly.graph_objects as go
-from core.codex_engine import generate_code, generate_chat_explanation
+from core.ai_engine import generate_code, generate_chat_explanation
 from core.executor import execute_code
 
 logger = logging.getLogger(__name__)
@@ -248,7 +248,7 @@ def render_chat_page():
                     explanation = generate_chat_explanation(last_query, result_summary, df_meta)
                     
                     st.write("🔍 Generating follow-up questions...")
-                    from core.codex_engine import generate_followup_questions
+                    from core.ai_engine import generate_followup_questions
                     followups = generate_followup_questions(last_query, result_summary)
                 
                 # Build the response

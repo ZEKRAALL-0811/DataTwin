@@ -62,7 +62,7 @@ def _stat_card(label: str, value: str, icon: str = ""):
 @st.cache_data(show_spinner=False)
 def _get_recommendation(insight_text: str) -> str:
     try:
-        from core.codex_engine import generate_actionable_recommendation
+        from core.ai_engine import generate_actionable_recommendation
         return generate_actionable_recommendation(insight_text)
     except Exception as e:
         logger.error(f"Error getting recommendation: {e}")
@@ -633,7 +633,7 @@ def render_insights_page():
                 clean_insights = _re.sub(r"<[^>]+>", "", "\n".join(insight_bullets))
 
                 st.write("🤖 Asking AI to write your executive summary...")
-                from core.codex_engine import generate_data_story
+                from core.ai_engine import generate_data_story
                 story = generate_data_story(clean_insights, meta)
                 st.session_state["data_story"] = story
                 status.update(label="✅ Data story ready!", state="complete")

@@ -39,6 +39,7 @@ Your job:
 Rules:
 - Do not import or use libraries outside pandas, numpy, plotly, scipy, scikit-learn, and statsmodels.
 - Prefer using the injected aliases `pd`, `np`, `px`, and `go` instead of importing libraries.
+- If using pandas resample or Grouper for months, use the frequency 'ME' instead of 'M', as 'M' is deprecated.
 - Never read or write files.
 - Never call print(); assign the final answer to `result`.
 - For regression requests, use scikit-learn LinearRegression and compute useful statistics yourself:

@@ -37,8 +37,7 @@ Your job:
 8. Return ONLY raw Python code. No markdown. No explanation. No triple backticks.
 
 Rules:
-- Do not import or use libraries outside pandas, numpy, plotly, scipy, and scikit-learn.
-- Do not use statsmodels. It is not installed.
+- Do not import or use libraries outside pandas, numpy, plotly, scipy, scikit-learn, and statsmodels.
 - Prefer using the injected aliases `pd`, `np`, `px`, and `go` instead of importing libraries.
 - Never read or write files.
 - Never call print(); assign the final answer to `result`.

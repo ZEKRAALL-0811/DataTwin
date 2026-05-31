@@ -176,15 +176,33 @@ def render_chat_page():
                 res_type = result_obj.get("type", "text")
                 res_data = result_obj.get("data")
 
-                if res_type == "text":
-                    st.write(res_data)
-                elif res_type == "chart":
-                    formatted_chart = format_plotly_figure(res_data)
-                    st.plotly_chart(formatted_chart, width='stretch')
-                elif res_type == "table":
-                    st.dataframe(res_data, width='stretch')
-                elif res_type == "error":
-                    st.error(res_data)
+                def render_result_item(item_type, item_data, key_prefix=""):
+                    if item_type == "text":
+                        if key_prefix:
+                            st.markdown(f"**{key_prefix}:** {item_data}")
+                        else:
+                            st.write(item_data)
+                    elif item_type == "chart":
+                        if key_prefix:
+                            st.markdown(f"**{key_prefix}:**")
+                        formatted_chart = format_plotly_figure(item_data)
+                        st.plotly_chart(formatted_chart, width='stretch')
+                    elif item_type == "table":
+                        if key_prefix:
+                            st.markdown(f"**{key_prefix}:**")
+                        st.dataframe(item_data, width='stretch')
+                    elif item_type == "dict":
+                        for k, v in item_data.items():
+                            from core.executor import get_result_type
+                            render_result_item(get_result_type(v), v, key_prefix=k)
+                    elif item_type == "list":
+                        for i, v in enumerate(item_data):
+                            from core.executor import get_result_type
+                            render_result_item(get_result_type(v), v)
+                    elif item_type == "error":
+                        st.error(item_data)
+
+                render_result_item(res_type, res_data)
 
                 # Show the "What This Means" explanation
                 explanation = msg.get("explanation", "")

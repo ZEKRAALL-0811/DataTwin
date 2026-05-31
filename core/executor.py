@@ -10,7 +10,7 @@ import plotly.graph_objects as go
 
 logger = logging.getLogger(__name__)
 ALLOWED_IMPORTS = {
-    "pandas", "numpy", "plotly", "scipy", "sklearn",
+    "pandas", "numpy", "plotly", "scipy", "sklearn", "statsmodels",
     # Safe standard library modules commonly needed for data analysis
     "ast", "math", "re", "json", "collections", "itertools",
     "functools", "statistics", "datetime", "decimal", "operator",
@@ -76,6 +76,10 @@ def get_result_type(result) -> str:
         return "chart"
     elif isinstance(result, (pd.DataFrame, pd.Series)):
         return "table"
+    elif isinstance(result, dict):
+        return "dict"
+    elif isinstance(result, (list, tuple)):
+        return "list"
     else:
         return "text"
 
